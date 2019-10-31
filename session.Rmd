@@ -1,0 +1,487 @@
+---
+title: "In-Session Code"
+output:
+  html_document:
+    toc: true
+    number_sections: false
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    self_contained: true
+bibliography: refs.bib
+biblio-style: authoryear
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r echo = FALSE, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, tidy = 'styler')
+```
+
+Libraries and settings
+
+```{r message = FALSE}
+library(tidyverse)
+library(rstan)
+library(sbcrs)
+rstan_options(auto_write = TRUE)
+doParallel::registerDoParallel(cores = parallel::detectCores())
+options(mc.cores = parallel::detectCores())
+```
+
+# One good, price per unit
+
+## Utility
+
+The consumer chooses a quantity $x$ of a single good $i$. Dropping the $i$ subscript, we know from Equation (6) in [@lee2014modeling] the utility from the good:$$
+u(x_{t}) = \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t +  1)
+$$
+
+Let's pause here to consider the structure of this utility function.
+
+```{r}
+u <- function(x, alpha, gamma, s, epsilon) {
+  alpha * exp(epsilon) / gamma * log1p(gamma * s * x)
+}
+crossing(x = seq_len(11) - 1L, 
+         alpha = round(10/log(11) * c(.25, .5, 1), 2), 
+         gamma = round(c(1, 2.35526, 5.4011), 2),  
+         s = round(c(1/10 *(-1 + sqrt(11)), 1, 12), 2),
+         epsilon = 0) %>%
+  mutate(u = u(x, alpha, gamma, s, epsilon)) %>%
+  ggplot(aes(x = x, y = u, colour = factor(gamma))) +
+  geom_point(alpha = .5) +
+  geom_line() +
+  facet_grid(alpha~s, labeller = label_both) +
+  scale_x_continuous(breaks = seq_len(11) - 1L) +
+  labs(colour = expression(gamma)) +
+  theme_bw()
+```
+
+The parameters in this utility function serve the following purposes:
+
+* $\alpha$ determines the marginal utility from higher  $x$ at the point $x = 0$, when $s = 1$ and $\gamma = 1$
+  
+```{r}
+crossing(x = exp(seq(log(.01), log(.1), by = .01)),
+         alpha = c(.5, 1, 2),
+         gamma = 1,
+         s = 1,
+         epsilon = 0) %>%
+  mutate(u = u(x, alpha, gamma, s, epsilon)) %>%
+  ggplot(aes(x = x, y = u,  colour = factor(alpha))) +
+  geom_line() +
+  labs(colour = expression(alpha)) +
+  theme_bw() 
+```
+
+* $\gamma$ shifts indifference curves to allow corner solutions
+  
+```{r}
+crossing(x = seq(-1.25, 6, by = .01),
+         gamma = c(.25, .5, .75)) %>%
+  mutate(w = 1 - x/(2*(1+x*gamma)))  %>%
+  filter(w < 3) %>%
+  ggplot(aes(x = x, y = w,  colour = factor(gamma))) +
+  geom_line() +
+  theme_bw() +
+    labs(y = 'Money',
+         x = 'Consumption quantity of good i',
+         colour = expression(gamma))
+```
+
+* $s$ rescales $x$ into "standard units"
+
+
+The utility from any remaining budget is $$u_0(x_t) = \alpha_0(M_t-p_t x_t)$$ meaning utility is linear in money. Note that $p_t$ is the price *per unit* of $x_t$. Hence total price $p_t(x_t) = p_t x_t$, which is linear in $x_t$.
+
+## Choices
+
+Assume the consumer can choose any amount of $x \in \{ 0, 1, \dots\}$ to purchase. Equation (9) becomes $$
+\begin{aligned}
+U^*(x_t^*) &\geq \max\left\{U^*(x_t + \Delta) | x_t^* \in F\right\}_{\Delta \in \{-1, 1\}} \\
+F & \equiv \left\{ x_t | M_t - p_t x_t \geq 0, x_t \in \{0, 1, \dots \} \right\}
+\end{aligned}$$
+
+In  words, this means that the highest utility attainable is at the quantity $x^*$. This quantity $x^*$ has a few restrictions:
+
+1. It needs to be affordable, so that $p_t x_t^* \leq M_t$
+2. It needs to be zero or a positive integer
+3. The utility from the quantity $x^*$ cannot be less than the utility from either $x^* + 1$ or $x^* - 1$ (if those are feasible given the constrains above)
+ 
+## Likelihood
+
+Equation (10) is derived by substituting the utility function in (6) into Equation (9). It's simplest to start by expanding Equation (9) assuming that $x^*+1$ is feasible and $x^*$ is positive. There are two cases to consider, but we can simplify the problem by letting $x^\pm_t$ stand in for both cases. 
+$$
+\begin{aligned}
+U(x_t) &\geq U(x^\pm_t)  \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t +  1) + \alpha_0(M_t-p_t x_t) 
+  &\geq \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t^\pm +  1) + \alpha_0(M_t-p_t x_t^\pm)  \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t +  1) - \alpha_0(p_t x_t) 
+  &\geq \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t^\pm +  1) - \alpha_0(p_t x_t^\pm) \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[ \log(\gamma s x_t +  1) - \log(\gamma s x_t^\pm +  1) \right]
+  &\geq \alpha_0 p_t( x_t -  x_t^\pm)\\
+\end{aligned}$$
+
+When $x_t^\pm = x_t - 1$ then we have
+$$
+\begin{aligned}
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[ \log(\gamma s x_t +  1) - \log(\gamma s (x_t - 1) +  1) \right]
+  &\geq \alpha_0 p_t\\
+  \mathrm{e}^{\epsilon_t}\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s (x_t - 1)  +  1}\right) \right]
+  &\geq \frac{\alpha_0 p_t \gamma }{\alpha}\\
+  \mathrm{e}^{\epsilon_t}
+  &\geq \frac{\alpha_0 p_t \gamma }{\alpha}\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s (x_t - 1)  +  1}\right) \right]^{-1}\\
+  \epsilon_t &\geq \log\left(\frac{\alpha_0 p_t\gamma }{\alpha}\right) - \log\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s (x_t - 1)+  1}\right) \right]\equiv \widetilde{lb}_t(x_t)
+\end{aligned}$$
+
+When $x_t^\pm = x_t + 1$ then we have $$
+\begin{aligned}
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[ \log(\gamma s x_t +  1) - \log(\gamma s (x_t + 1) +  1) \right]
+  &\geq - \alpha_0 p_t\\
+  \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[  \log(\gamma s (x_t + 1) +  1) -\log(\gamma s x_t +  1)  \right]
+  &\leq  \alpha_0 p_t\\
+  \mathrm{e}^{\epsilon_t}\left[ \log\left(\frac{\gamma s (x_t + 1)  +  1}{\gamma s x_t +  1}\right) \right]
+  &\leq \frac{\alpha_0 p_t \gamma }{\alpha}\\
+  \mathrm{e}^{\epsilon_t}
+  &\leq \frac{\alpha_0 p_t \gamma }{\alpha}\left[ \log\left(\frac{\gamma s (x_t + 1)  +  1}{\gamma s x_t +  1}\right) \right]^{-1}\\
+  \epsilon_t
+  &\leq \log\left(\frac{\alpha_0 p_t \gamma }{\alpha}\right) - \log\left[ \log\left(\frac{\gamma s (x_t + 1)  +  1}{\gamma s x_t +  1}\right) \right]\equiv \widetilde{ub}_t(x_t)
+\end{aligned}$$
+
+From the standpoint of estimation, the upper and lower bounds on $\epsilon_t$ have a  natural meaning. We assume that $x_t$ is optimal. Given that it is optimal, then $\epsilon_t$ must be less than $\widetilde{ub}_t(x_t)$. Why? Because if $\epsilon_t$ was greater than $\widetilde{ub}_t(x_t)$, then we would have observed a bigger value of $x_t$. Similarly, $\epsilon_t$ had to be greater than $\widetilde{lb}_t(x_t)$, because otherwise we would have observed a smaller $x_t$. 
+
+The edge cases are straightforward. If the optimal $x_t = 0$ then we don't know how low $\epsilon_t$ was.  We set $lb_t(x_t) = -\infty$ in that case. And if the $x_t + 1$ violates the  budget constraint, then we don't know how big $\epsilon_t$ was. In that case, we set $ub_t(x_t) = \infty$. 
+
+In summary, $$
+\begin{aligned}
+& lb_t(x_t) \leq \epsilon_t \leq ub_t(x_t) \\
+lb_t(x_t) =& \begin{cases}\widetilde{lb}_t(x_t) & x_t > 0 \\
+                     -\infty & x_t = 0
+                     \end{cases}\\
+ub_t(x_t) =& \begin{cases}\widetilde{ub}_t(x_t) & (x_t + 1) p_t \leq M_t \\
+                     \infty & (x_t + 1) p_t >  M_t
+                     \end{cases}
+\end{aligned}$$
+
+Given all this complexity, the likelihood is surprisingly simple. The likelihood of the observed quantity $x_t$ is the probability of the set of $\epsilon_t$'s that fall between the lower and upper bounds. Let $f(\epsilon)$ and $F(\epsilon)$ denote the pdf and cdf of $\epsilon_t$ respectively—the likelihood of $x_t$ is:
+$$\begin{aligned}
+\ell(x_t) & = \int^{ub_t(x_t)}_{lb_t(x_t)} f(\epsilon) d\epsilon \\
+& = F(ub_t(x_t)) - F(lb_t(x_t))
+\end{aligned}$$
+
+The plot below shows the distribution of $\epsilon_t\sim N(0,\sigma^2)$, and the regions that would rationalize various values of $x_t$. The highlighted area is the total probability of $x_t = 3$ given $\gamma = 2$, $\alpha = 3$, $\alpha_0 = s = 0$, $M = 10$, and $p = 1$. Maximizing the likelihood of $x_t = 3$ implies finding parameter values that lead to the largest possible highlighted region.
+
+```{r}
+bound <- function(ux, lx = NULL, dp = 1, gamma = 2, alpha = 3, M = 10) {
+  if (ux == 0)
+    return (-Inf)
+  if (ux * dp > M)
+    return (Inf)
+  if (is.null(lx))
+    lx <- ux - 1
+  log(dp * gamma) - log(alpha) - log(log1p(gamma * ux) - log1p(gamma * lx))
+}
+pd <- 
+  tibble(ux = -1L + seq_len(13),
+         lx = ux - 1L) %>%
+  mutate(b = map_dbl(ux, ~bound(.x)),
+         pb = dnorm(b),
+         labx = .5*b  + .5 * lead(b),
+         labx = ifelse(is.infinite(labx) & !is.infinite(b),
+                       b + (b - lag(b)), labx),
+         labx = ifelse(ux == 0, lead(b) - .5, labx)) %>%
+  filter(ux < 11)
+fd <-
+  tibble(x = seq(bound(3), bound(4), by = .01),
+         y  = 0) %>%
+  bind_rows(tibble(x = seq(bound(4), bound(3), by = -.01),
+            y = dnorm(x)))
+ggplot(NULL) +
+  geom_polygon(aes(x, y), fd, fill = scales::muted(
+    'red', l = 50, c = 100)) +
+  stat_function(aes(x = seq(-3, 3, by = .01)),
+                fun = dnorm) +
+  geom_segment(aes(x = b, xend = b, y = 0, yend = pb),
+               pd) +
+  geom_text(aes(x = labx, y = 0, label = ux), pd,
+            nudge_y = -.01) +
+  theme_bw() +
+  labs(x = expression(epsilon), y = expression(f(epsilon)))
+```
+
+
+## Simulation
+
+We'll assume $\epsilon_t\sim N(0,\sigma^2)$. We'll also set $s = 1$ and $\alpha_0 = 1$, leading to:
+
+$$
+\begin{aligned}
+{lb}_t(x_t) &\equiv \begin{cases}
+\log\left(\frac{p_t\gamma }{\alpha}\right) - \log\left[ \log\left(\frac{\gamma  x_t +  1}{\gamma (x_t - 1) +  1}\right) \right], & x_t > 0 \\
+-\infty, & x_t = 0
+\end{cases}
+\\
+{ub}_t(x_t) &\equiv \begin{cases}
+\log\left(\frac{p_t \gamma }{\alpha}\right) - \log\left[ \log\left(\frac{\gamma  (x_t+1)  +  1}{\gamma  x_t +  1}\right) \right], & (x_t + 1) p_t \leq M_t \\
+\infty, & (x_t + 1) p_t >  M_t
+\end{cases}\\
+\ell(x_t)&= \Phi\left(\frac{ub_t(x_t)}{\sigma}\right) - \Phi\left(\frac{lb_t(x_t)}{\sigma}\right)
+\end{aligned}
+$$
+
+```{r}
+gen_data <- function(seed) {
+  set.seed(1e6+seed)
+  
+  T <- 10
+  M <- rep(10, T) + sample.int(3, T, replace = TRUE) - 1L
+  p <- rep(.5, T)
+  
+  pcer <- function(U, a) (- log(a)/U)
+  sigma_rate <- pcer(1, .1)
+  alpha_rate <- pcer(1, .5)
+  gamma_rate <- pcer(1, .1)
+  
+  list(T = T, p = p, M = M, sigma_rate = sigma_rate,
+       alpha_rate = alpha_rate, gamma_rate = gamma_rate)
+}
+gen_params <- function(seed, data) {
+  set.seed(2e6+seed)
+  sigma_raw <- rgamma(1, 2, rate = .5)
+  alpha_raw <- rexp(1)
+  gamma_raw <- rexp(1)
+  list(sigma_raw = sigma_raw, alpha_raw = alpha_raw, gamma_raw = gamma_raw)
+}
+gen_modeled_data <- function(seed, data, params) {
+  set.seed(3e6+seed)
+  sigma <- params$sigma_raw / data$sigma_rate
+  alpha <- params$alpha_raw / data$alpha_rate
+  gamma <- 1 + params$gamma_raw / data$gamma_rate
+  epsilon <- rnorm(data$T, 0, 1) * sigma
+  optx <- function(alpha, sigma, gamma, epsilon_t, M_t, p_t) {
+    Ux <- function(x, alpha, gamma, epsilon_t, M_t, p_t) {
+      u <- alpha * exp(epsilon_t) / gamma * log1p(gamma * x) + M_t - p_t * x
+      u[M_t < p_t * x] <- -Inf
+      u
+    }
+    maxx <- floor(M_t/p_t)
+    which.max(Ux(seq_len(maxx + 1) - 1, alpha, gamma, epsilon_t, M_t, p_t)) - 1L
+  }
+  x <- seq_len(data$T) %>%
+    map_dbl(~optx(alpha, sigma, gamma, epsilon[.x], data$M[.x], data$p[.x]))
+  list(x = x)
+}
+prior_predictive_distribution <- function(seed) {
+    data <- gen_data(seed)
+    params <- gen_params(seed, data)
+    gen_modeled_data(seed, data, params)
+}
+seq_len(100) %>%
+  map(~prior_predictive_distribution(.x)) %>%
+  unlist() %>%
+  as.vector() %>%
+  tibble(x = .) %>%
+  ggplot(aes(x = x)) + 
+  stat_bin(bins = 21) +
+  theme_bw()
+```
+
+Stan model `model1.stan`:
+
+```{r comment = '', echo = FALSE}
+read_file('model1.stan') %>% cat(sep = '\n')
+```
+
+
+```{r}
+the_model <- stan_model('model1.stan', save_dso = TRUE)
+sample_from_stan <- function(seed, data, params, modeled_data, iters) {
+  modeled_data$x <- as.array(modeled_data$x)
+  data$p <- as.array(data$p)
+  data$M <- as.array(data$M)
+  data$no_lb <- as.array(1L * (modeled_data$x == 0))
+  data$no_ub <- as.array(1L * ((modeled_data$x + 1) * data$p > data$M))
+
+  stopifnot(all(modeled_data$x * data$p <= data$M))
+
+  data_for_stan <- c(data, modeled_data)
+  sampling(the_model, data = data_for_stan, seed = seed,
+           chains = 1, iter = 2 * iters, warmup = iters, 
+           open_progress = FALSE, show_messages = FALSE,
+           refresh = 1000)
+}
+```
+
+```{r cache = TRUE}
+doParallel::registerDoParallel(cores = parallel::detectCores())
+sbc <- SBC$new(gen_data, gen_params, gen_modeled_data, sample_from_stan)
+sbc$calibrate(512, 20)
+sbc$plot()
+sbc$summary()
+```
+
+# One good, not all x's are feasible, no standard price per unit
+
+In the previous example, total price was $p_t x_t$. In practice, this is not usually the case, due for example to volume discounts. If prices instead are a function of $x_t$, then the utility from the remaining budget becomes 
+$$
+u_0(x_t) = \alpha_0(M - p_t(x_t))
+$$
+
+If we observe prices,  then we do not need to know the function $p_t()$ and can instead just condition on what is observed. But the possibly non-linear relationship between $x_t$ and total price means the likelihood function will need to change. 
+
+It might also be the case that the quantity of a good might not be easily expressible as a sequence of integers. For example, some $x$'s might not be feasible. In that case, $x^\pm_t$ may not equal $x_t - 1$ or $x_t + 1$. If we always  have $x_t + c$ and $x_t - c$ in the data, then we can use the $s_t$ term  in the utility function to rescale the $x_t$'s so that they are in single integer units. But that will not typically be the case.
+
+## Likelihood
+
+In either of these cases, derivation of the likelihood is very similar to what we have already seen, but with a few small differences:
+
+$$
+\begin{aligned}
+U(x_t) &\geq U(x^\pm_t)  \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t +  1) + \alpha_0(M_t-p_t(x_t)) 
+  &\geq \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t^\pm +  1) + \alpha_0(M_t-p_t(x_t^\pm))  \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t +  1) - \alpha_0(p_t(x_t))
+  &\geq \frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \log(\gamma s x_t^\pm +  1) - \alpha_0(p_t(x_t^\pm)) \\
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[ \log(\gamma s x_t +  1) - \log(\gamma s x_t^\pm +  1) \right]
+  &\geq \alpha_0 \left[p_t(x_t) -  p_t(x_t^\pm))\right]\\
+\end{aligned}$$
+
+We'll work through the case when $x_t^\pm \equiv x_t^- < x_t$, the case for $x_t^\pm \equiv x_t^+ > x_t$ is similar.
+
+First, define $p_t \equiv p_t(x_t)$ and $p_t^- \equiv p_t(x_t^-)$. Note that it must be the case that $p_t^- < p_t$, otherwise we cannot rationalize the consumers' choice of $x_t$. 
+
+$$
+\begin{aligned}
+\frac{\alpha \mathrm{e}^{\epsilon_t}}{\gamma} \left[ \log(\gamma s x_t +  1) - \log(\gamma s x_t^- +  1) \right]
+  &\geq \alpha_0 (p_t -  p_t^-)\\
+  \mathrm{e}^{\epsilon_t}\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s x_t^-  +  1}\right) \right]
+  &\geq \frac{\alpha_0 (p_t -  p_t^-) \gamma }{\alpha}\\
+  \mathrm{e}^{\epsilon_t}
+  &\geq \frac{\alpha_0 (p_t -  p_t^-) \gamma }{\alpha}\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s x_t^-  +  1}\right) \right]^{-1}\\
+  \epsilon_t &\geq \log\left(\frac{\alpha_0 (p_t -  p_t^-)\gamma }{\alpha}\right) - \log\left[ \log\left(\frac{\gamma s x_t +  1}{\gamma s x_t^- +  1}\right) \right]\equiv \widetilde{lb}_t(x_t)
+\end{aligned}$$
+
+To estimate the likelihood, we need different data  than before. Previously, we needed only the observed units purchased, $x_t$, and  the price per unit $p_t$. Now we need information about the next highest and next lowest feasible units, $x_t^+$ and $x_t^-$, as well as their corresponding prices, $p_t^+$ and $p_t^-1$. These may or may not be available in the data, in which case it might be necessary to impute the values of the neighboring, feasible units  and prices. 
+
+## Simulation
+
+```{r}
+gen_data <- function(seed) {
+  set.seed(1e6+seed)
+  
+  feasible_x <- c(0, 1, 2, 3, 6, 12, 24)
+  
+  T <- 10
+  M <- rep(10, T) + sample.int(3, T, replace = TRUE) - 1L
+  p <- map(feasible_x, ~round(.x * .5  - .15* log1p(rep(.5, T)*.x), 2)) %>%
+    transpose() %>%
+    map(~unlist(.x))
+  
+  pcer <- function(U, a) (- log(a)/U)
+  sigma_rate <- pcer(1, .1)
+  alpha_rate <- pcer(1, .5)
+  gamma_rate <- pcer(1, .1)
+  
+  list(T = T, p = p, M = M, sigma_rate = sigma_rate,
+       alpha_rate = alpha_rate, gamma_rate = gamma_rate,
+       feasible_x = feasible_x)
+}
+gen_params <- function(seed, data) {
+  set.seed(2e6+seed)
+  sigma_raw <- rgamma(1, 2, rate = .5)
+  alpha_raw <- rexp(1)
+  gamma_raw <- rexp(1)
+  list(sigma_raw = sigma_raw, alpha_raw = alpha_raw, gamma_raw = gamma_raw)
+}
+gen_modeled_data <- function(seed, data, params) {
+  set.seed(3e6+seed)
+  sigma <- params$sigma_raw / data$sigma_rate
+  alpha <- params$alpha_raw / data$alpha_rate
+  gamma <- 1 + params$gamma_raw / data$gamma_rate
+  epsilon <- rnorm(data$T, 0, 1) * sigma
+  optx <- function(alpha, sigma, gamma, epsilon_t, M_t, p_t) {
+    Ux <- function(x, alpha, gamma, epsilon_t, M_t, p_t) {
+      u <- alpha * exp(epsilon_t) / gamma * log1p(gamma * x) + M_t - p_t
+      u[M_t < p_t] <- -Inf
+      u
+    }
+    data$feasible_x[
+      which.max(Ux(data$feasible_x, alpha, gamma, epsilon_t, M_t, p_t))
+      ]
+  }
+  
+  x <- seq_len(data$T) %>%
+    map_dbl(~optx(alpha, sigma, gamma, epsilon[.x], data$M[.x], data$p[[.x]]))
+  list(x = x)
+}
+prior_predictive_distribution <- function(seed) {
+    data <- gen_data(seed)
+    params <- gen_params(seed, data)
+    modeled_data <- gen_modeled_data(seed, data, params)
+    modeled_data
+}
+seq_len(100) %>%
+  map(~prior_predictive_distribution(.x)) %>%
+  unlist() %>%
+  as.vector() %>%
+  tibble(x = .) %>%
+  ggplot(aes(x = x)) + 
+  stat_count() +
+  theme_bw()
+```
+
+Stan model `model2.stan`:
+
+```{r comment = '', echo = FALSE}
+read_file('model2.stan') %>% cat(sep = '\n')
+```
+
+
+```{r}
+the_model_2 <- stan_model('model2.stan', save_dso = TRUE)
+
+sample_from_stan <- function(seed, data, params, modeled_data, iters) {
+  ix <- map_dbl(modeled_data$x, ~which(.x == data$feasible_x))
+  uix <- ix + 1
+  uix[uix > length(data$feasible_x)] <- NA
+  lix <- ix - 1
+  lix[lix == 0] <- NA
+  modeled_data$ux <- as.array(data$feasible_x[uix])
+  modeled_data$lx <- as.array(data$feasible_x[lix])
+  modeled_data$x <- as.array(modeled_data$x)
+  
+  data$up <- as.array(map2_dbl(data$p, uix, ~.x[.y]))
+  data$lp <- as.array(map2_dbl(data$p, lix, ~.x[.y]))
+  data$p <- as.array(map2_dbl(data$p, ix, ~.x[.y]))
+  
+  data$M <- as.array(data$M)
+
+  data$no_lb <- as.array(1L*(is.na(modeled_data$lx)))
+  data$no_ub <- as.array(1L*(is.na(modeled_data$ux) | data$up > data$M))
+
+  modeled_data$lx[data$no_lb == 1L] <- 0
+  modeled_data$ux[data$no_ub == 1L] <- 0
+  data$lp[data$no_lb == 1L] <- 0
+  data$up[data$no_ub == 1L] <- 0
+  
+  stopifnot(all(data$p <= data$M))
+  
+  data_for_stan <- c(data, modeled_data)
+  sampling(the_model_2, data = data_for_stan, seed = seed,
+           chains = 1, iter = 2 * iters, warmup = iters, 
+           open_progress = FALSE, show_messages = FALSE,
+           refresh = 1000)
+}
+```
+
+```{r cache = TRUE}
+doParallel::registerDoParallel(cores = parallel::detectCores())
+sbc <- SBC$new(gen_data, gen_params, gen_modeled_data, sample_from_stan)
+sbc$calibrate(512, 20, keep_stan_fit = FALSE)
+sbc$plot()
+sbc$summary()
+```
+
+# References

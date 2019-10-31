@@ -1,0 +1,321 @@
+---
+title: "Pre-Session Preparation"
+output: 
+  html_document:
+    toc: true
+    number_sections: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    self_contained: true
+bibliography: refs.bib
+biblio-style: authoryear
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r echo = FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE)
+```
+
+
+# Install packages
+
+This course module will make use of a few packages, which you need to install (or update) before proceeding.
+```{r}
+# install.packages("tidyverse", dependencies = TRUE)
+# install.packages("rstan", dependencies = TRUE)
+```
+
+We will also use a package I wrote to test Stan models. To install it, you will need the devtools package installed first. 
+```{r}
+# install.packages("devtools")
+# devtools::install_github("jasonmtroos/sbcrs")
+```
+
+
+At this point, the following code should not yield any errors.
+```{r}
+library(tidyverse)
+library(rstan)
+library(sbcrs)
+rstan_options(auto_write = TRUE)
+```
+
+
+# Reading
+
+## Background on the standard discrete choice model
+
+[Download the third chapter](http://eml.berkeley.edu/books/choice2nd/Ch03_p34-75.pdf) of [@train2009discrete]. Read everything from the start of chapter 3 through the end of section 3.1. Then skip ahead and read section 3.10. 
+
+The basic discrete choice logit model is a standard model to which we will connect some of the material covered in this module. If you are not familiar with this model already, you should read the entire chapter.
+
+## The main article for our module
+
+The main article for this module is [@lee2014modeling], which you can download [here](https://pubsonline.informs.org/doi/abs/10.1287/mksc.2013.0829). Read the article from the beginning through the end of section 4. You need to read the technical material very carefully. I suggest also working through the calculus and algebra yourself as you read.[^1]
+
+[^1]: I nearly always use Mathematica or Wolfram Alpha because I'm terrible at calculus and algebra. Visit (https://wolframalpha.com) to try out Wolfram Alpha if you've never used it before. To give you a taste for how it works, the expression  `D[α1 Exp[ε]/γ Log[γ s x+1]+α0(M-p x),x]`  produces what is shown in Equation (8) (for the case when there is only one good). [Click here](https://www.wolframalpha.com/input/?i=D%5B%CE%B11+Exp%5B%CE%B5%5D%2F%CE%B3+Log%5B%CE%B3+s+x%2B1%5D%2B%CE%B10%28M-p+x%29%2Cx%5D) to see the result. 
+
+After you've read the article, continue reading below. 
+
+## Representing the standard discrete choice model in a direct utility framework
+
+Equation (14) shows how the standard discrete choice model can be derived from a direct utility model. I want you to notice two things. First, the consumer's wealth, $M$, drops out of the choice probability because $M$ is the same regardless of the option that is chosen. 
+
+Second, the expression at the end of (14) skips a lot of steps, and in the end doesn't even look like the standard discrete choice model in logit form. So here we will work through a simpler example—one with just a single good—and go through the derivations more slowly. 
+
+### Utility function
+
+Assume that we can buy $x\in\{0,1\}$ units of it at a price of $p x$. I will define the sub-utility from the inside good ($x=1$) to be $$u_1(x, \epsilon) = \alpha_1 \mathrm{e}^\epsilon x$$ (with $\alpha_1 \geq 0$). 
+
+The sub-utility from wealth is $$u_0(x) = \alpha_0 (M - p x),  \quad \alpha_0 \geq 0$$ Therefore, total utility, given $x$ and $\epsilon$, is the sum of $u_1$ and $u_0$: $$\begin{aligned}
+U(x,\epsilon) &= u_1(x,\epsilon) + u_0(x) \\
+&= \alpha_1\mathrm{e}^\epsilon x + \alpha_0 (M - p x) \\
+&= \alpha_1\mathrm{e}^\epsilon x + \alpha_0 M - \alpha_0 p x\\
+&= \left[\alpha_1   \mathrm{e}^\epsilon - \alpha_0 p \right] x + \alpha_0 M \\
+\end{aligned}$$
+
+If $x = 1$, then utility depends on the sum of the utility from the starting level of wealth, $\alpha_0 M$, and the utility from the good net of the disutility from its price (the terms inside square brackets). If $x = 0$, then utility is just $\alpha_0 M$.
+
+### Choice probability
+
+We don't observe $\epsilon$, so to estimate the model, we treat it as a random variable. We condition on the observed choices in the data, $x$, which we assume reflect  optimal decision making. Hence the $x$'s are really optimal $x^*$'s. 
+
+The probability (over the unobserved $\epsilon$) of the optimal $x^*$ is  $$\begin{aligned}
+\Pr_\epsilon[x^*=1] &=\Pr_\epsilon\left[U(1,\epsilon) \geq U(0,\epsilon)\right] \\
+&=\Pr_\epsilon\left[\left\{\alpha_1 \mathrm{e}^\epsilon - \alpha_0 p \right\} 1 + \alpha_0 M\geq \left\{\alpha_1  \mathrm{e}^\epsilon - \alpha_0 p \right\} 0 + \alpha_0 M\right] \\
+&=\Pr_\epsilon\left[\left\{\alpha_1  \mathrm{e}^\epsilon - \alpha_0 p \right\}  + \alpha_0 M\geq  + \alpha_0 M\right] \\
+&=\Pr_\epsilon\left[\alpha_1  \mathrm{e}^\epsilon - \alpha_0 p  \geq  0\right] \\
+&=\Pr_\epsilon\left[\log(\alpha_1  \mathrm{e}^\epsilon )  \geq  \log(\alpha_0 p) \right] \\
+&=\Pr_\epsilon\left[\log(\alpha_1) +  \mathrm{e}^\epsilon   \geq  \log(\alpha_0 p) \right] \\
+&=\Pr_\epsilon\left[\epsilon  \geq   \log( \alpha_0 p) - \log(\alpha_1)\right] \\
+&=\Pr_\epsilon\left[\epsilon  \geq   \log(\alpha_0 p  ) -\tilde{\alpha}_1\right],\quad\tilde{\alpha}_1 \equiv \log(\alpha_1).
+\end{aligned}$$
+If we assume that $\epsilon \sim Logistic(0,1)$ then this expression is the same as the following probability $$\Pr_\epsilon[x^*=1]  = \frac{1}{1 + \exp(-\tilde\alpha_1)  \alpha_0 p}$$
+
+### Sub-utility from wealth
+
+Notice that the choice probability above is not in the standard logit form. A standard logit choice model would typically have  the $\alpha_0 p$ term inside the exponent: $1/(1+\exp(-\tilde\alpha_1 + \alpha_0 p))$. The reason for this discrepancy is our specification of *linear* sub-utility from wealth. This raises the question: What type of sub-utility function for wealth leads to the standard logit choice model? Here is one: $$u_0(x) = \exp(\alpha_0 M) - \exp(\alpha_0 p x) $$
+
+```{r}
+u0 <- function(M, alpha0, p, x) {
+  exp(alpha0 * M) - exp(alpha0 * p * x)
+}
+```
+
+This is what $u_0(0)$ looks like at different levels of $\alpha_0$ and $M$.
+
+```{r}
+g <- function(data, mapping, f) {
+  ggplot(data, mapping) +
+    stat_function(aes(colour = '.240'), fun = ~f(.x, alpha0 = .240)) +
+    stat_function(aes(colour = '.179'), fun = ~f(.x, alpha0 = .179)) +
+    stat_function(aes(colour = '.125'), fun = ~f(.x, alpha0 = .125)) +
+    scale_colour_viridis_d(name = expression(alpha[0]), end = .8, option = 'C') +
+    theme_minimal()
+}
+g(tibble(M = seq(0, 10, by = .1)), aes(x = M), 
+  partial(u0, p = 0, x = 0)) +
+  labs(y = 'Utility from wealth', 
+       x = 'Wealth')
+```
+
+The function is somewhat easier to understand when we plot the sub-utility from the *remaining* wealth after purchasing one unit at different price levels.
+
+```{r}
+g(tibble(p = seq(0, 10, by = .1)), aes(x = p), 
+  partial(u0, M = 10, x = 1)) +
+  labs(y = 'Utility from remaining wealth after purchasing one unit', 
+       x = 'Price for one unit') +
+  theme_minimal()
+```
+
+Lower values of $\alpha_0$ imply a smaller decrease in utility when purchasing at higher levels of $p$—which we would expect for relatively less price sensitive consumers. The non-linearity in $u_0$ further means that these decreases are closer to linear for individuals with lower $\alpha_0$'s.  
+
+The standard utility function used for choice models has a sub-utility from wealth that is exponential in the amount of money not spent on each choice occasion. **What implications does this modelling decision have on the consumer behavior we are modeling?** Think it through; we will discuss this point during our session.
+
+# Estimation with Stan
+
+During our session, we will talk about different features of direct utility models, derive a few of them, and use Bayesian estimation (in Stan) to sample from them. To get you started, I want you to follow along with the material below, which implements a standard single-option discrete choice model in Stan. We start with a specification of the model. Then we write R code to simulate data from this model, Stan code to estimate from it, and finally testing code that tells us if the two match up like we expect.
+
+## Specification for the standard discrete choice model
+
+Our basic model will be the following has a single decision maker making many choices. Choice occasions are indexed $t=1,\dots,T$. The decision maker can choose from two options, $y\in\{0,1\}$. The total utility is $$\begin{aligned}
+U_t(y,\epsilon_t) &= u_{1t}(y,\epsilon_t) + u_{0t}(y) \\
+u_{1t}(y,\epsilon_t) &= [\exp(\alpha + \epsilon_t) - 1]y\\
+u_{0t}(y) &= \exp(\gamma M) - \exp(\gamma p_t y) \\
+\epsilon_t &\sim Logistic(0,1).
+\end{aligned}$$ This is equivalent to indirect utility from choice $y$ at occasion $t$ in  the following form: $V_t(y) + \tilde{\epsilon}_t(y)$ with $$
+\begin{aligned}
+V_{t}(y) &= \begin{cases}
+  \alpha - \gamma p_t,\qquad &\text{if }y=1\\
+  0,\qquad &\text{otherwise}
+  \end{cases}\\
+\tilde{\epsilon}_t(y) &\sim EV(0,1) \\
+\tilde{\epsilon}_t(1) &\perp\!\!\!\perp \tilde{\epsilon}_t(0)
+\end{aligned}$$
+
+Note: 
+  : Recall from chapter 3 of Train that if $a\sim EV(0,1)$ and $b\sim EV(0,1)$ (and the two are independent), then $a-b \sim Logistic(0,1)$. The direct utility version of this model includes a single $\epsilon$ following a logistic distribution. The indirect utility version has two independent error terms, $\tilde{\epsilon}_t(1)$ and $\tilde{\epsilon}_t(0)$, one  each for $y=1$ and $y=0$, that follow independent $EV(0,1)$ distributions. Both specifications lead to the same choice probabilities.
+
+The likelihood of each $y_t$ can be derived from the direct utility model in the following way: $$\begin{aligned}
+\ell(y_t = 1) 
+    &= \Pr_\epsilon[U_t(1, \epsilon_t) \geq U_t(0,  \epsilon_t)] \\
+    &= \Pr_\epsilon\left[\exp(\alpha  + \epsilon_t) - 1 + \exp(\gamma M)  - \exp(\gamma p_t) \geq \exp(\gamma M)  - 1\right] \\
+    &= \Pr_\epsilon\left[\exp(\alpha  + \epsilon_t) \geq  \exp(\gamma p_t ) \right]\\
+    &=\Pr_\epsilon\left[ \alpha  + \epsilon_t   \geq  \gamma p_t\right] \\
+    &=\Pr_\epsilon\left[\epsilon_t  \geq    \gamma p_t - \alpha\right] \\
+    &= \frac{1}{1 + \exp(-\alpha + \gamma p_t)}\\
+\ell(y_t = 0) &= 1 - \ell(y_t = 1)
+\end{aligned}
+$$
+
+Full derivation of the likelihood starting from the indirect  utility function is covered in [@train2009discrete]. In brief, it is $$\begin{aligned}
+\ell(y_t = 1) 
+    &= \Pr_\tilde{\epsilon}[V_t(1) \geq V_t(0)] \\
+    &= \Pr_\tilde{\epsilon}[\alpha - \gamma p_t + \tilde{\epsilon}_t(1) \geq
+                    \tilde{\epsilon}_t(0)] \\
+    &= \Pr_\tilde{\epsilon}[\tilde{\epsilon}_t(1) - \tilde{\epsilon}_t(0) \geq \gamma p_t - \alpha ]\\
+    &= \Pr_\epsilon[\epsilon \geq \gamma p_t - \alpha]\\
+    &= \frac{1}{1 + \exp(-\alpha + \gamma p_t)}
+\end{aligned}$$
+
+The log-likelihood of all observed choices is $$
+LL(y) = \sum_{t=1}^T \log(\ell(y_t))
+$$
+
+To complete the Bayesian model, we specify prior distributions for the parameters. $$\begin{aligned}
+\alpha &\sim N(0,1)\\
+\gamma &\sim N(1, .5^2)
+\end{aligned}$$
+
+Note
+  : The prior distribution for $\gamma$ makes positive values more likely, but doesn't enforce this as a constraint. This is not the only  option, but it is the choice we are making here. 
+
+## Simulating data from the standard discrete choice model
+
+The following functions simulate random data (prices), parameters, and choices according to the model defined above.
+
+```{r}
+gen_data <- function(seed, T) {
+  set.seed(seed + 1e5)
+  p <- round(1 + runif(T) * 3, 2)
+  list(T = T, p = p, sd_alpha = 1, sd_gamma = .5, mean_gamma = 1)
+}
+gen_params <- function(seed, data) {
+  set.seed(seed + 2e5)
+  alpha_raw <- rnorm(1)                   # standardized
+  gamma_raw <- rnorm(1)                   # standardized
+  list(alpha_raw = alpha_raw, gamma_raw = gamma_raw)
+}
+gen_modeled_data <- function(seed, data, params) {
+  set.seed(seed + 3e5)
+  alpha <- params$alpha_raw * data$sd_alpha                    # on model scale
+  gamma <- params$gamma_raw * data$sd_gamma + data$mean_gamma  # on model scale
+  pr_1 <- 1 / (1 + exp(-alpha + gamma * data$p))
+  y <- 1L * purrr::rbernoulli(data$T, pr_1)
+  list(y = y)
+}
+```
+
+We can use these functions to visualize the prior predictive distribution of $y$:
+
+```{r}
+sample_from_prior_predictive_distribution <- function(seed) {
+  d <- gen_data(seed, T = 200)
+  p <- gen_params(seed, d)
+  gen_modeled_data(seed, d, p)$y
+}
+proportion_of_y1_choices <- 
+  seq_len(100) %>%
+  map(~sample_from_prior_predictive_distribution(seed = .x))  %>%
+  map(~mean(.x)) %>%
+  unlist()
+ggplot(NULL, aes(x = proportion_of_y1_choices)) + 
+  stat_bin(bins = 10) + 
+  theme_minimal()
+```
+
+## Estimating the standard discrete choice model using Stan
+
+Next, we will define and compile a Stan model that reflects everything we've already done.
+
+```{r}
+stan_model_code <- "
+data{
+  int<lower = 0> T;
+  real<lower = 0> p[T];
+  real<lower = 0> sd_alpha;
+  real<lower = 0> sd_gamma;
+  real mean_gamma;
+  int<lower = 0, upper = 1> y[T];
+}
+parameters {
+  real alpha_raw;
+  real gamma_raw;
+}
+transformed parameters {
+  real alpha;
+  real gamma;
+  alpha = alpha_raw * sd_alpha;
+  gamma = gamma_raw * sd_gamma + mean_gamma;
+}
+model {
+  for (t in 1:T) {
+    real v1;
+    v1 = alpha - gamma * p[t];
+    y[t] ~ bernoulli_logit(v1);
+  }
+  alpha_raw ~ std_normal();
+  gamma_raw ~ std_normal();
+}
+"
+logit_model <- stan_model(model_code = stan_model_code)
+sample_from_stan <- function(seed, data, params, modeled_data, iters) {
+  data_for_stan <- c(data, modeled_data)
+  sampling(logit_model, data = data_for_stan, seed = seed,
+           chains = 1, iter = 2 * iters, warmup = iters, 
+           open_progress = FALSE, show_messages = FALSE,
+           refresh = 1000)
+}
+```
+
+Finally, let's test the model.
+
+```{r}
+doParallel::registerDoParallel(cores = parallel::detectCores())
+sbc <-
+  SBC$new(
+    data = partial(gen_data, T = 50),
+    params = gen_params,
+    modeled_data = gen_modeled_data,
+    sampling = sample_from_stan
+  )
+sbc$calibrate(N = 512, L = 50, min_iterations = 1000, keep_stan_fit = FALSE)
+sbc$plot()
+sbc$summary()
+```
+
+The distribution of quantiles is as expected (don't worry if you have no idea what that means—we'll cover it in our session). This suggests the Stan model matches our simulation code.
+
+To see this for yourself (rather than through test results), you can run the following code. We'll set $\alpha = 1$ and $\gamma = .5$, simulate data, then estimate the parameters.
+
+```{r}
+options(mc.cores = parallel::detectCores())
+d <- gen_data(seed = 1, T = 10000)
+p <- list(gamma_raw = (.5 - d$mean_gamma)/d$sd_gamma,
+          alpha_raw = (1 - 0)/d$sd_alpha)
+y <- gen_modeled_data(seed = 1, data = d, params = p)
+fit <- 
+  sampling(logit_model, data = c(d, y), seed = 1,
+         chains = 6, open_progress = FALSE, 
+         show_messages = FALSE, refresh = 500)
+fit
+stan_plot(fit, pars = c('alpha', 'gamma'))
+```
+
+
+# References
+
+
