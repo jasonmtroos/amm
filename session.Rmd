@@ -171,7 +171,7 @@ $$\begin{aligned}
 & = F(ub_t(x_t)) - F(lb_t(x_t))
 \end{aligned}$$
 
-The plot below shows the distribution of $\epsilon_t\sim N(0,\sigma^2)$, and the regions that would rationalize various values of $x_t$. The highlighted area is the total probability of $x_t = 3$ given $\gamma = 2$, $\alpha = 3$, $\alpha_0 = s = 0$, $M = 10$, and $p = 1$. Maximizing the likelihood of $x_t = 3$ implies finding parameter values that lead to the largest possible highlighted region.
+The plot below shows the distribution of $\epsilon_t\sim N(0,\sigma^2)$, and the regions that would rationalize various values of $x_t$. The highlighted area is the total probability of $x_t = 3$ given $\gamma = 2$, $\alpha = 3$, $\alpha_0 = s = 1$, $M = 10$, and $p = 1$. Maximizing the likelihood of $x_t = 3$ implies finding parameter values that lead to the largest possible highlighted region.
 
 ```{r}
 bound <- function(ux, lx = NULL, dp = 1, gamma = 2, alpha = 3, M = 10) {
